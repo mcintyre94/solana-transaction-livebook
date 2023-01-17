@@ -2,8 +2,8 @@
 
 ```elixir
 Mix.install([
-  {:httpoison, "~> 1.8"},
-  {:poison, "~> 5.0"},
+  {:req, "~> 0.3.4"},
+  {:jason, "~> 1.4.0"},
   {:kino, "~> 0.8.0"}
 ])
 ```
@@ -15,22 +15,17 @@ This section includes all the Elixir code to fetch and render the given transact
 You don't need to edit any of it
 
 ```elixir
-# Initialise the HTTP Client
-HTTPoison.start()
-Kino.nothing()
-```
-
-```elixir
 # Define transaction fetching logic
 defmodule HeliusFetch do
   def fetch_transaction(signature, api_key) do
-    http_options = [params: [{"api-key", api_key}]]
     transactions_url = "https://api.helius.xyz/v0/transactions"
-    body = %{transactions: [signature]} |> Poison.encode!()
 
-    response = HTTPoison.post!(transactions_url, body, [], http_options)
-    transactions = Poison.decode!(response.body)
-    transactions |> List.first()
+    Req.post!(
+      transactions_url,
+      params: ["api-key": api_key],
+      json: %{transactions: [signature]}
+    ).body
+    |> List.first()
   end
 end
 
@@ -68,7 +63,7 @@ defmodule TransactionRender do
     ### #{name}
 
     ```json
-    #{Poison.encode!(event, pretty: true)}
+    #{Jason.encode!(event, pretty: true)}
     ```
     """)
   end
@@ -250,7 +245,7 @@ transaction
 ```elixir
 # convert to JSON
 transaction
-|> Poison.encode!(pretty: true)
+|> Jason.encode!(pretty: true)
 |> IO.puts()
 ```
 
