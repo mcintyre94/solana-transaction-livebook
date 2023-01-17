@@ -1,0 +1,263 @@
+# Helius Transaction Render
+
+```elixir
+Mix.install([
+  {:httpoison, "~> 1.8"},
+  {:poison, "~> 5.0"},
+  {:kino, "~> 0.8.0"}
+])
+```
+
+## Code Setup
+
+This section includes all the Elixir code to fetch and render the given transaction
+
+You don't need to edit any of it
+
+```elixir
+# Initialise the HTTP Client
+HTTPoison.start()
+Kino.nothing()
+```
+
+```elixir
+# Define transaction fetching logic
+defmodule HeliusFetch do
+  def fetch_transaction(signature, api_key) do
+    http_options = [params: [{"api-key", api_key}]]
+    transactions_url = "https://api.helius.xyz/v0/transactions"
+    body = %{transactions: [signature]} |> Poison.encode!()
+
+    response = HTTPoison.post!(transactions_url, body, [], http_options)
+    transactions = Poison.decode!(response.body)
+    transactions |> List.first()
+  end
+end
+
+Kino.nothing()
+```
+
+````elixir
+# Define transaction rendering logic
+defmodule TransactionRender do
+  defp truncate(string, length) do
+    start = String.slice(string, 0, length)
+    last = String.slice(string, 0 - length, length)
+    start <> "..." <> last
+  end
+
+  defp render_summary(transaction) do
+    source = transaction["source"]
+    type = transaction["type"]
+    description = transaction["description"]
+    fee_payer = transaction["feePayer"]
+
+    Kino.Markdown.new("""
+    **Source**: #{source}
+
+    **Type**: #{type}
+
+    **Description**: #{description}
+
+    **Fee Payer**: [#{truncate(fee_payer, 8)}](https://explorer.solana.com/address/#{fee_payer})
+    """)
+  end
+
+  defp render_event(name, event) do
+    Kino.Markdown.new("""
+    ### #{name}
+
+    ```json
+    #{Poison.encode!(event, pretty: true)}
+    ```
+    """)
+  end
+
+  defp render_events(transaction) do
+    events =
+      transaction["events"]
+      |> Enum.map(fn {name, event} -> render_event(name, event) end)
+
+    Kino.Layout.grid(events)
+  end
+
+  defp native_transfer_diagram_line(transfer) do
+    from =
+      case transfer["fromUserAccount"] do
+        "" -> "none"
+        address -> truncate(address, 4)
+      end
+
+    to =
+      case transfer["toUserAccount"] do
+        "" -> "none"
+        address -> truncate(address, 4)
+      end
+
+    amount = (transfer["amount"] / 1_000_000_000) |> Float.round(4)
+    label = "#{amount} SOL"
+    # Mermaid diagram line starting with 2 spaces
+    "  #{from}-...->|#{label}|#{to}"
+  end
+
+  defp render_native_transfers(transaction) do
+    native_transfers = transaction["nativeTransfers"]
+
+    diagram_lines =
+      native_transfers
+      |> Enum.filter(fn transfer -> transfer["amount"] > 0 end)
+      |> Enum.map(fn transfer -> native_transfer_diagram_line(transfer) end)
+      |> Enum.join("\n")
+
+    diagram = """
+    flowchart LR
+    #{diagram_lines}
+    """
+
+    Kino.Mermaid.new(diagram)
+  end
+
+  defp token_transfer_diagram_line(transfer) do
+    from =
+      case transfer["fromUserAccount"] do
+        "" -> "none"
+        address -> truncate(address, 4)
+      end
+
+    to =
+      case transfer["toUserAccount"] do
+        "" -> "none"
+        address -> truncate(address, 4)
+      end
+
+    token_amount = transfer["tokenAmount"]
+    mint = truncate(transfer["mint"], 4)
+    label = "#{token_amount} #{mint}"
+    "  #{from}-...->|#{label}|#{to}"
+  end
+
+  defp render_token_transfers(transaction) do
+    token_transfers = transaction["tokenTransfers"]
+
+    diagram_lines =
+      token_transfers
+      |> Enum.map(fn transfer -> token_transfer_diagram_line(transfer) end)
+      |> Enum.join("\n")
+
+    diagram = """
+    flowchart LR 
+    #{diagram_lines}
+    """
+
+    Kino.Mermaid.new(diagram)
+  end
+
+  def render(transaction) do
+    Kino.Layout.tabs(
+      Summary: render_summary(transaction),
+      Tree: Kino.Tree.new(transaction),
+      Events: render_events(transaction),
+      "Native Transfers": render_native_transfers(transaction),
+      "Token Transfers": render_token_transfers(transaction)
+    )
+  end
+end
+
+Kino.nothing()
+````
+
+```elixir
+# Agent to hold the latest transaction state
+{:ok, last_transaction} = Agent.start_link(fn -> nil end)
+Kino.nothing()
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Fetch a transaction
+
+```elixir
+form =
+  Kino.Control.form(
+    [
+      signature: Kino.Input.text("Transaction Signature"),
+      api_key: Kino.Input.password("Helius API Key")
+    ],
+    submit: "Fetch"
+  )
+
+form |> Kino.render()
+
+frame = Kino.Frame.new()
+```
+
+This next code block does all the magic
+
+You just need to evaluate it :)
+
+```elixir
+for event <- Kino.Control.stream(form) do
+  signature_length = byte_size(event.data.signature)
+  api_key_length = byte_size(event.data.api_key)
+
+  case {signature_length, api_key_length} do
+    {0, _} ->
+      Kino.Frame.render(
+        frame,
+        Kino.Markdown.new("**No transaction signature given**")
+      )
+
+    {_, 0} ->
+      Kino.Frame.render(
+        frame,
+        Kino.Markdown.new("**No Helius API key given**")
+      )
+
+    _ ->
+      transaction = HeliusFetch.fetch_transaction(event.data.signature, event.data.api_key)
+      Agent.update(last_transaction, fn _ -> transaction end)
+      Kino.Frame.render(frame, TransactionRender.render(transaction))
+      Kino.nothing()
+  end
+end
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Optional: write your own code!
+
+The latest fetched transaction can be used at any time for any independent code
+
+You can do whatever you like here!
+
+```elixir
+# get the latest fetched transaction
+transaction = Agent.get(last_transaction, fn transaction -> transaction end)
+Kino.nothing()
+```
+
+```elixir
+# transaction is a map
+transaction
+```
+
+```elixir
+# render it as a tree
+transaction
+|> Kino.Tree.new()
+```
+
+```elixir
+# convert to JSON
+transaction
+|> Poison.encode!(pretty: true)
+|> IO.puts()
+```
+
+```elixir
+# sum all native balance changes
+transaction["accountData"]
+|> Enum.reduce(0, fn data, acc ->
+  acc + data["nativeBalanceChange"]
+end)
+```
